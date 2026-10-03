@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
-/**
- * Subscribes to SSE for a given run_id.
- * Accumulates events into an array.
- * Falls back to no-op if runId is null.
- */
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api'
+
 export function useRunStream(runId) {
   const [events, setEvents] = useState([])
   const esRef = useRef(null)
@@ -13,24 +10,20 @@ export function useRunStream(runId) {
     if (!runId) return
     setEvents([])
 
-    const es = new EventSource('http://localhost:8000/api/stream/' + runId)
+    const es = new EventSource(API_URL + '/stream/' + runId)
     esRef.current = es
 
     es.onmessage = (evt) => {
       try {
         const data = JSON.parse(evt.data)
         setEvents(prev => [...prev, data])
-        if (data?.data?.final) {
-          es.close()
-        }
+        if (data?.data?.final) es.close()
       } catch (err) {
         console.error('SSE parse error', err)
       }
     }
 
-    es.onerror = () => {
-      es.close()
-    }
+    es.onerror = () => es.close()
 
     return () => {
       es.close()

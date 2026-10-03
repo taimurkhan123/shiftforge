@@ -11,6 +11,9 @@ from app.services import repository
 from app.models.adaptation import StrategySpec
 from app.models.run import RunState, RunStatus, RunStep
 from app.workflows.crew_pipeline import run_crew_pipeline
+from app.tools.registry import tool_registry
+from app.tools import bootstrap  # noqa: F401 — ensures tools are registered
+from app.workflows.tool_pipeline import run_tool_pipeline
 
 
 router = APIRouter(prefix="/api", tags=["shiftforge"])
@@ -190,3 +193,162 @@ async def stream_run(run_id: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+# ---------- Tool Registry endpoints (multi-tool upgrade) ----------
+
+@router.get("/tools")
+def list_tools():
+    """List every tool the agent can adapt to, with all their scenarios."""
+    return {"tools": tool_registry.to_list()}
+
+
+@router.get("/tools/{tool_name}")
+def get_tool(tool_name: str):
+    """Get a single tool definition by name."""
+    if not tool_registry.has(tool_name):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Tool '{tool_name}' not found. Available: {tool_registry.all_names()}",
+        )
+    return tool_registry.get(tool_name).to_dict()
+
+# ---------- Tool actions (multi-tool upgrade) ----------
+
+@router.post("/tools/{tool_name}/change")
+def change_tool_environment(tool_name: str):
+    """
+    Toggle a tool's active environment version (v1 <-> v2).
+    Does NOT touch the global weather environment used by /api/run.
+    """
+    if not tool_registry.has(tool_name):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Tool '{tool_name}' not found. Available: {tool_registry.all_names()}",
+        )
+    tool = tool_registry.get(tool_name)
+    current = tool.active_version
+    target = "v2" if current == "v1" else "v1"
+    scenario = tool.activate(target)
+    return {
+        "status": "changed",
+        "tool": tool_name,
+        "previous_version": current,
+        "active_version": target,
+        "contract": scenario.contract,
+    }
+
+
+@router.post("/tools/{tool_name}/simulate")
+def simulate_tool(tool_name: str):
+    """
+    Run the tool's active simulator and return the raw response.
+    Safe: only predefined simulators can be invoked.
+    """
+    if not tool_registry.has(tool_name):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Tool '{tool_name}' not found. Available: {tool_registry.all_names()}",
+        )
+    tool = tool_registry.get(tool_name)
+    try:
+        raw = tool.active_scenario.simulate()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Simulator failed: {e}")
+    return {
+        "tool": tool_name,
+        "version": tool.active_version,
+        "response": raw,
+    }
+
+# ---------- Tool run endpoint (multi-tool upgrade) ----------
+
+from pydantic import BaseModel as _PydanticBaseModel
+from typing import Optional as _Optional
+
+
+class _ToolRunRequest(_PydanticBaseModel):
+    task: str = "Complete the requested task using this tool."
+    expected_version: str = "v1"
+
+
+@router.post("/tools/{tool_name}/run")
+async def run_tool_agent(tool_name: str, body: _ToolRunRequest):
+    """
+    Run the adaptation pipeline for a specific tool.
+
+    If the tool is on its expected version (default v1), returns success immediately.
+    If the environment changed, runs the generic CrewAI adaptation pipeline.
+    """
+    if not tool_registry.has(tool_name):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Tool '{tool_name}' not found. Available: {tool_registry.all_names()}",
+        )
+
+    tool = tool_registry.get(tool_name)
+    active_version = tool.active_version
+    expected_version = body.expected_version
+
+    run_id = "SF-" + uuid.uuid4().hex[:6].upper()
+    started = time.perf_counter()
+
+    run = RunState(
+        run_id=run_id,
+        task=body.task,
+        environment_version=active_version,
+        initial_strategy_version=f"{tool_name}_v1",
+        status=RunStatus.RUNNING,
+    )
+
+    await emit(run_id, "monitor", "running",
+               f"Agent started (tool={tool_name}, env={active_version})")
+
+    # Case 1: environment matches expected -> immediate success
+    if active_version == expected_version:
+        raw = tool.active_scenario.simulate()
+        elapsed = int((time.perf_counter() - started) * 1000)
+        run.steps.append(RunStep(
+            stage="monitor", status="success",
+            message=f"Tool responded: {raw}",
+            duration_ms=elapsed, data={"raw": raw},
+        ))
+        await emit(run_id, "monitor", "success",
+                   f"Tool responded: {raw}", data={"raw": raw})
+
+        run.status = RunStatus.SUCCESS
+        run.result = raw
+        run.total_adaptation_ms = elapsed
+        run.steps.append(RunStep(
+            stage="complete", status="success",
+            message="Task completed successfully.",
+            duration_ms=elapsed,
+        ))
+        await emit(run_id, "complete", "success",
+                   "Task completed successfully.",
+                   data={"final": True, "result": run.result})
+        repository.save_run(run)
+        return run.model_dump()
+
+    # Case 2: environment changed -> run adaptation
+    elapsed = int((time.perf_counter() - started) * 1000)
+    failure_reason = f"Tool '{tool_name}' is on version '{active_version}' but expected '{expected_version}'."
+    run.steps.append(RunStep(
+        stage="monitor", status="failed",
+        message=failure_reason,
+        duration_ms=elapsed, data={"active": active_version, "expected": expected_version},
+    ))
+    await emit(run_id, "monitor", "failed", failure_reason,
+               data={"active": active_version, "expected": expected_version})
+
+    run.failure_reason = failure_reason
+    repository.save_run(run)
+
+    run = await run_tool_pipeline(
+        run=run,
+        tool_name=tool_name,
+        task=body.task,
+        failure_reason=failure_reason,
+        actual_response=None,
+    )
+    return run.model_dump()
+

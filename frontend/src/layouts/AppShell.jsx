@@ -1,11 +1,12 @@
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { Activity, LayoutDashboard, FlaskConical, Server, History, ListChecks, BookOpen, PlayCircle, Menu, X } from 'lucide-react'
+import { Activity, LayoutDashboard, FlaskConical, Server, History, ListChecks, BookOpen, PlayCircle, Menu, X, Wrench } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { getHealth } from '../lib/api'
 
 const NAV = [
   { to: '/dashboard',   label: 'Overview',      icon: LayoutDashboard },
   { to: '/demo',        label: 'Demo Mode',     icon: PlayCircle, highlight: true },
+  { to: '/tool-lab',    label: 'Tool Lab',      icon: Wrench, highlight: true },
   { to: '/agent-lab',   label: 'Agent Lab',     icon: FlaskConical },
   { to: '/environment', label: 'Environment',   icon: Server },
   { to: '/adaptations', label: 'Adaptations',   icon: History },

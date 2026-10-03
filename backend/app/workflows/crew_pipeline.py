@@ -47,9 +47,22 @@ async def _emit(run_id, stage, status, message, data=None, final=False):
     await event_bus.publish(run_id, payload)
 
 
-def _run_crew_sync(crew: Crew):
-    """Run the crew synchronously (CrewAI is sync-first)."""
-    return crew.kickoff()
+def _run_crew_sync(crew: Crew, max_retries: int = 2):
+    """Run the crew synchronously with retry on tool-choice failures."""
+    import time as _time
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            return crew.kickoff()
+        except Exception as e:
+            msg = str(e)
+            last_error = e
+            if "tool choice" in msg.lower() or "tool_use_failed" in msg.lower():
+                if attempt < max_retries:
+                    _time.sleep(1.5)
+                    continue
+            raise
+    raise last_error
 
 
 async def run_crew_pipeline(run, original_strategy, failure_reason, actual_response):

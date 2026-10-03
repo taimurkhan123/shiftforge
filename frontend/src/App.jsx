@@ -3,6 +3,7 @@ import AppShell from './layouts/AppShell'
 import Overview from './pages/Overview'
 import DemoMode from './pages/DemoMode'
 import AgentLab from './pages/AgentLab'
+import ToolLab from './pages/ToolLab'
 import Environment from './pages/Environment'
 import Adaptations from './pages/Adaptations'
 import Runs from './pages/Runs'
@@ -18,6 +19,7 @@ export default function App() {
         <Route element={<AppShell />}>
           <Route path="/dashboard" element={<Overview />} />
           <Route path="/demo" element={<DemoMode />} />
+          <Route path="/tool-lab" element={<ToolLab />} />
           <Route path="/agent-lab" element={<AgentLab />} />
           <Route path="/environment" element={<Environment />} />
           <Route path="/adaptations" element={<Adaptations />} />

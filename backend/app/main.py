@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.api import router
+from app.tools import bootstrap  # noqa: F401 — registers all tools at startup
 from app.database import init_db
 
 
@@ -16,7 +17,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="ShiftForge API",
     description="Self-Adapting AI Agent Platform",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
